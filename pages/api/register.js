@@ -9,40 +9,57 @@ const asArray = (x) => (Array.isArray(x) ? x : (x ? [x] : []));
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ ok:false, error:"Method not allowed" });
+
   try {
+    // Parse form
     const form = formidable({
       multiples: true,
       maxFileSize: 15 * 1024 * 1024,
-      filter: p => p.mimetype === null || ALLOWED_MIME.has(p.mimetype),
+      filter: part => part.mimetype === null || ALLOWED_MIME.has(part.mimetype),
     });
     const { fields, files } = await new Promise((resolve, reject) => {
-      form.parse(req, (err, f, fl) => (err ? reject(err) : resolve({ fields: f, files: fl })));
+      form.parse(req, (err, flds, fls) => (err ? reject(err) : resolve({ fields: flds, files: fls })));
     });
 
+    // Build email body
     const ordered = ["first_name","last_name","email","phone","ein","business_type","account_type","business_name","address","city","state","zip","country"];
     const lines = [];
     for (const k of ordered) if (fields[k] !== undefined) lines.push(`${k}: ${asArray(fields[k]).join(", ")}`);
-    for (const [k,v] of Object.entries(fields)) if (!ordered.includes(k)) lines.push(`${k}: ${asArray(v).join(", ")}`);
+    for (const [k, v] of Object.entries(fields)) if (!ordered.includes(k)) lines.push(`${k}: ${asArray(v).join(", ")}`);
 
+    // Attachments
     const attachments = [];
     const attach = (key) => {
       for (const f of asArray(files[key])) {
         if (f?.filepath && f?.originalFilename) {
-          attachments.push({ filename: f.originalFilename, content: fs.createReadStream(f.filepath), contentType: f.mimetype || undefined });
+          attachments.push({
+            filename: f.originalFilename,
+            content: fs.createReadStream(f.filepath),
+            contentType: f.mimetype || undefined
+          });
         }
       }
     };
-    attach("fein_license"); attach("tobacco_license"); attach("state_tax_id"); attach("gov_id");
+    attach("fein_license");
+    attach("tobacco_license");
+    attach("state_tax_id");
+    attach("gov_id");
 
+    // Brevo SMTP
     const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_APP_PASSWORD }
+      host: process.env.SMTP_HOST,            // smtp-relay.brevo.com
+      port: Number(process.env.SMTP_PORT),    // 587
+      secure: process.env.SMTP_PORT === "465",
+      auth: {
+        user: process.env.SMTP_USER,          // your Brevo login email
+        pass: process.env.SMTP_PASS           // the SMTP key you generated
+      }
     });
 
     const subject = `New Business Registration: ${fields.business_name?.toString() || "Unknown"}`;
     await transporter.sendMail({
-      from: `"Business Registration" <${process.env.MAIL_USER}>`,
-      to: "jiva.health.amazon@gmail.com",
+      from: `"Business Registration" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
+      to: "jiva.health.amazon@gmail.com", // destination inbox
       subject,
       text: `A new business registration was submitted:\n\n${lines.join("\n")}\n`,
       attachments
