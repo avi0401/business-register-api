@@ -65,11 +65,31 @@ export default async function handler(req, res) {
       attachments
     });
     
-    //  Redirect if form sent a "redirect" field
-    if (fields.redirect && typeof fields.redirect === 'string') {
-      res.writeHead(302, { Location: fields.redirect.toString() });
-      return res.end();
-    }
+   // After sendMail succeeds…
+const getFirst = (v) => Array.isArray(v) ? v[0] : v;
+const urlFromField   = getFirst(fields.redirect);
+const urlFromQuery   = getFirst(req.query?.redirect);
+const redirectRaw    = urlFromField || urlFromQuery;           // accept either hidden field or ?redirect=
+const redirect       = redirectRaw ? String(redirectRaw).trim() : "";
+
+// basic safety check: only http/https
+const isHttpUrl = /^https?:\/\//i.test(redirect);
+
+if (isHttpUrl) {
+  // 303 is better for POST -> GET after success
+  res.writeHead(303, { Location: redirect });
+  return res.end();
+}
+
+// If no redirect provided, fall back for browsers that prefer HTML
+if ((req.headers.accept || "").includes("text/html")) {
+  res.writeHead(303, { Location: "/" }); // or default thank-you page
+  return res.end();
+}
+
+// Fallback for API clients/curl
+return res.status(200).json({ ok: true });
+
     
     // fallback for API clients / curl
     return res.status(200).json({ ok: true });
