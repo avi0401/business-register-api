@@ -1,11 +1,9 @@
+// pages/api/register.js
 import formidable from "formidable";
 import nodemailer from "nodemailer";
-import fs from "fs";
 
 export const config = {
-  api: {
-    bodyParser: false, // Required for formidable
-  },
+  api: { bodyParser: false }, // Formidable needs this OFF
 };
 
 export default async function handler(req, res) {
@@ -13,74 +11,93 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   }
 
+  // helper: get first value if Formidable returns arrays
+  const first = (v) => (Array.isArray(v) ? v[0] : v);
+
   try {
-    // 1. Parse form fields + files
-    const form = formidable({ multiples: true });
+    // 1) Parse form
+    const form = formidable({ multiples: true /* allow many files */ });
     const [fields, files] = await new Promise((resolve, reject) => {
-      form.parse(req, (err, fields, files) => {
-        if (err) reject(err);
-        else resolve([fields, files]);
-      });
+      form.parse(req, (err, flds, fls) => (err ? reject(err) : resolve([flds, fls])));
     });
 
-    // 2. Setup Brevo SMTP transport
+    // 2) Build transporter (Brevo / Sendinblue)
     const transporter = nodemailer.createTransport({
-      host: "smtp-relay.brevo.com",
-      port: 587,
+      host: process.env.SMTP_HOST,                 // smtp-relay.brevo.com
+      port: parseInt(process.env.SMTP_PORT || "587", 10),
+      secure: false,                               // STARTTLS will upgrade
       auth: {
-        user: process.env.MAIL_USER, // e.g. 964ebe001@smtp-brevo.com
-        pass: process.env.MAIL_APP_PASSWORD, // Your Brevo master password
+        user: process.env.SMTP_USER,               // 964ebe001@smtp-brevo.com
+        pass: process.env.SMTP_PASS,               // Master Password
       },
     });
 
-    // 3. Collect attachments (licenses, IDs, etc.)
-    const attachments = Object.values(files).map((file) => ({
-      filename: file.originalFilename,
-      path: file.filepath,
-      contentType: file.mimetype,
-    }));
+    // 3) Collect text lines and attachments
+    const lines = [
+      `First Name: ${first(fields.first_name) || ""}`,
+      `Last Name: ${first(fields.last_name) || ""}`,
+      `Email: ${first(fields.email) || ""}`,
+      `Phone: ${first(fields.phone) || ""}`,
+      `Business Name: ${first(fields.business_name) || ""}`,
+      `Address: ${first(fields.address) || ""}`,
+      `City: ${first(fields.city) || ""}`,
+      `State: ${first(fields.state) || ""}`,
+      `ZIP: ${first(fields.zip) || ""}`,
+      `Country: ${first(fields.country) || ""}`,
+      `Business Type: ${first(fields.business_type) || ""}`,
+      `Account Type: ${first(fields.account_type) || ""}`,
+      `EIN/FEIN: ${first(fields.fein) || ""}`,
+    ];
 
-    // 4. Build email content
-    const subject = `New Business Registration: ${fields.business_name || "Unknown"}`;
-    const body = `
-A new business registration was submitted:
+    const toArray = (val) => (Array.isArray(val) ? val : val ? [val] : []);
+    const attachments = Object.values(files)
+      .flatMap(toArray)
+      .map((f) => ({
+        filename: f.originalFilename,
+        path: f.filepath,
+        contentType: f.mimetype,
+      }));
 
-First Name: ${fields.first_name || ""}
-Last Name: ${fields.last_name || ""}
-Email: ${fields.email || ""}
-Phone: ${fields.phone || ""}
-Business Name: ${fields.business_name || ""}
-Address: ${fields.address || ""}
-City: ${fields.city || ""}
-State: ${fields.state || ""}
-Zip: ${fields.zip || ""}
-Country: ${fields.country || ""}
-Business Type: ${fields.business_type || ""}
-Account Type: ${fields.account_type || ""}
-EIN/FEIN: ${fields.fein || ""}
-`;
+    const subject = `New Business Registration: ${first(fields.business_name) || "Unknown"}`;
+    const text = `A new business registration was submitted:\n\n${lines.join("\n")}\n`;
 
+    // 4) Send email
     await transporter.sendMail({
-      from: `"Business Registration" <${process.env.MAIL_USER}>`,
-      to: "jiva.health.amazon@gmail.com", // Where submissions go
+      from: `"Business Registration" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
+      to: process.env.MAIL_TO || "jiva.health.amazon@gmail.com",
       subject,
-      text: body,
+      text,
       attachments,
     });
 
-    // 5. Redirect if "redirect" field is present
-    const redirectUrl = fields.redirect || req.query.redirect;
-    if (redirectUrl && /^https?:\/\//i.test(redirectUrl)) {
-      res.writeHead(303, { Location: redirectUrl.toString() });
+    // 5) Redirect handling (hidden field or ?redirect=)
+    const urlFromField = first(fields.redirect);
+    const urlFromQuery = first(req.query?.redirect);
+    const redirectRaw = (urlFromField || urlFromQuery || "").toString().trim();
+
+    if (/^https?:\/\//i.test(redirectRaw)) {
+      res.writeHead(303, { Location: redirectRaw });
       return res.end();
     }
 
-    // 6. Fallback JSON response
+    // If browser expects HTML but no redirect specified, send them home
+    if ((req.headers.accept || "").includes("text/html")) {
+      res.writeHead(303, { Location: "/" });
+      return res.end();
+    }
+
+    // 6) API fallback
     return res.status(200).json({ ok: true });
   } catch (err) {
-    console.error("Register API error:", err);
+    // CRITICAL: show real reason in Vercel logs + payload
+    console.error("Register API error:", {
+      message: err?.message,
+      code: err?.code,
+      response: err?.response,
+      command: err?.command,
+    });
     return res
       .status(500)
-      .json({ ok: false, error: "Failed to process submission" });
+      .json({ ok: false, error: err?.message || "Failed to process submission" });
   }
 }
