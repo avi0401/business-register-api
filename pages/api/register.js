@@ -65,37 +65,33 @@ export default async function handler(req, res) {
       attachments
     });
     
-   // After sendMail succeeds…
+    // After sendMail succeeds…
 const getFirst = (v) => Array.isArray(v) ? v[0] : v;
-const urlFromField   = getFirst(fields.redirect);
-const urlFromQuery   = getFirst(req.query?.redirect);
-const redirectRaw    = urlFromField || urlFromQuery;           // accept either hidden field or ?redirect=
-const redirect       = redirectRaw ? String(redirectRaw).trim() : "";
 
-// basic safety check: only http/https
+const urlFromField = getFirst(fields.redirect);
+const urlFromQuery = getFirst(req.query?.redirect);
+const redirectRaw  = urlFromField || urlFromQuery;              // hidden field OR ?redirect=
+const redirect     = redirectRaw ? String(redirectRaw).trim() : "";
+
+// allow only http/https
 const isHttpUrl = /^https?:\/\//i.test(redirect);
 
 if (isHttpUrl) {
-  // 303 is better for POST -> GET after success
+  // POST -> GET after success
   res.writeHead(303, { Location: redirect });
   return res.end();
 }
 
-// If no redirect provided, fall back for browsers that prefer HTML
+// If no redirect provided but browser prefers HTML, send somewhere safe
 if ((req.headers.accept || "").includes("text/html")) {
-  res.writeHead(303, { Location: "/" }); // or default thank-you page
+  res.writeHead(303, { Location: "/" }); // or your default thank-you page
   return res.end();
 }
 
-// Fallback for API clients/curl
+// ✅ Single JSON fallback for API clients / curl
 return res.status(200).json({ ok: true });
 
-    
-    // fallback for API clients / curl
-    return res.status(200).json({ ok: true });
-    
-  } catch (err) {
-    console.error("Register API error:", err);
-    return res.status(500).json({ ok:false, error:"Failed to process submission" });
-  }
+} catch (err) {
+  console.error("Register API error:", err);
+  return res.status(500).json({ ok: false, error: "Failed to process submission" });
 }
