@@ -59,13 +59,21 @@ export default async function handler(req, res) {
     const subject = `New Business Registration: ${fields.business_name?.toString() || "Unknown"}`;
     await transporter.sendMail({
       from: `"Business Registration" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
-      to: "jiva.health.amazon@gmail.com", // destination inbox
+      to: "jiva.health.amazon@gmail.com",
       subject,
       text: `A new business registration was submitted:\n\n${lines.join("\n")}\n`,
       attachments
     });
-
-    return res.status(200).json({ ok:true });
+    
+    //  Redirect if form sent a "redirect" field
+    if (fields.redirect && typeof fields.redirect === 'string') {
+      res.writeHead(302, { Location: fields.redirect.toString() });
+      return res.end();
+    }
+    
+    // fallback for API clients / curl
+    return res.status(200).json({ ok: true });
+    
   } catch (err) {
     console.error("Register API error:", err);
     return res.status(500).json({ ok:false, error:"Failed to process submission" });
